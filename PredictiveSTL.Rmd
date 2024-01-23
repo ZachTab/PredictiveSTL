@@ -1,0 +1,17 @@
+---
+title: "PredictiveSTL"
+output: html_document
+date: "2024-01-23"
+---
+
+First Initialize source code:
+```{r}
+source("R/data.R")
+```
+
+
+Here I download the OSF data,
+```{r}
+download_data()
+```
+
