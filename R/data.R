@@ -27,8 +27,11 @@ preprocess_file <- function(id) {
   # Normalize data
   output$response[which(output$rotation > 0)] <- -1 *  output$response[which(output$rotation > 0)]
   output$rotation[which(output$rotation < 0)] <- -1 *  output$rotation[which(output$rotation < 0)]
-  return(output)
   
+  # Use aggregate to calculate the mean for each rotation value
+  result <- aggregate(response ~ rotation, data = output, mean)
+  
+  return(result)
 }
 
 # Setup a vector of id strings
@@ -46,7 +49,6 @@ for (file in csv_files) {
   identifiers_list[[identifier]] <- identifier
 }
 
-
 # Concatenate their output data into one data frame
 preprocess_all_files <- function(identifiers_list) {
   # Create an empty list to store processed data frames
@@ -62,14 +64,21 @@ preprocess_all_files <- function(identifiers_list) {
   # Combine all the individual data frames into one
   combined_data <- do.call(rbind, processed_data_list)
   
-  # Now, combined_data contains all the results in one singular data frame
+  # Plot all the data with lines connecting the points for each participant
+  plot(combined_data$rotation, combined_data$response, type = "n",
+       xlab = "Rotation in Degrees", ylab = "Average Response", main = "Average Response Per Rotation Value")
+  
+  for (identifier in identifiers_list) {
+    participant_data <- processed_data_list[[identifier]]
+    lines(participant_data$rotation, participant_data$response, type = "o", pch = 16, col = "black")
+    lines(participant_data$rotation, participant_data$response, type = "l", col = "black")
+  }
+  
+  # Customize x-axis tick marks to be in intervals of 5, limited to the range 0 to 45
+  axis(1, at = seq(0, 45, by = 5))
+  
   return(combined_data)
 }
 
 # Call the function with the identifiers list obtained earlier
 combined_data <- preprocess_all_files(identifiers_list)
-
-
-# Plot all of the combined data
-plot(combined_data$rotation, combined_data$response)
-
