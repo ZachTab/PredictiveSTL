@@ -31,7 +31,10 @@ preprocess_file <- function(id) {
   # Use aggregate to calculate the mean for each rotation value
   result <- aggregate(response ~ rotation, data = output, mean)
   
-  return(result)
+  # Store both "output" and "result" data frames in a list
+  processed_data <- list(output = output, result = result)
+  
+  return(processed_data)
 }
 
 # Setup a vector of id strings
@@ -49,36 +52,39 @@ for (file in csv_files) {
   identifiers_list[[identifier]] <- identifier
 }
 
-# Concatenate their output data into one data frame
+# Function to automate and preprocess all participant data
 preprocess_all_files <- function(identifiers_list) {
-  # Create an empty list to store processed data frames
-  processed_data_list <- list()
-  
   # Loop through each identifier and apply the preprocess_file function
   for (identifier in identifiers_list) {
-    # Apply the preprocess_file function and store the result in the processed_data_list
-    processed_data <- preprocess_file(identifier)
-    processed_data_list[[identifier]] <- processed_data
+    preprocess_file(identifier)
   }
-  
-  # Combine all the individual data frames into one
-  combined_data <- do.call(rbind, processed_data_list)
-  
-  # Plot all the data with lines connecting the points for each participant
-  plot(combined_data$rotation, combined_data$response, type = "n",
-       xlab = "Rotation in Degrees", ylab = "Average Response", main = "Average Response Per Rotation Value")
-  
-  for (identifier in identifiers_list) {
-    participant_data <- processed_data_list[[identifier]]
-    lines(participant_data$rotation, participant_data$response, type = "o", pch = 16, col = "black")
-    lines(participant_data$rotation, participant_data$response, type = "l", col = "black")
-  }
-  
-  # Customize x-axis tick marks to be in intervals of 5, limited to the range 0 to 45
-  axis(1, at = seq(0, 45, by = 5))
-  
-  return(combined_data)
 }
 
-# Call the function with the identifiers list obtained earlier
-combined_data <- preprocess_all_files(identifiers_list)
+# Function to plot all participant raw/averaged data
+plot_combined_data <- function(identifiers_list) {
+  rows <- ceiling(length(identifiers_list) / 2)
+  par(mfrow=c(rows, 2), mar=c(2, 2, 2, 2))
+  
+  for (i in seq_along(identifiers_list)) {
+    identifier <- identifiers_list[[i]]
+    processed_data <- preprocess_file(identifier)
+    
+  
+    # Plot "output" data points
+    plot(processed_data$output$rotation, processed_data$output$response,
+           type = "p", pch = 16, col = "black",
+           xlab = "Rotation in Degrees", ylab = "Average Response",
+           main = identifier)
+      
+      
+    # Plot "result" data points with lines connecting them
+    lines(processed_data$result$rotation, processed_data$result$response,
+              type = "l", col = "red")
+    
+    
+  }
+}
+
+# To call preprocess_all_files and plot_combined_data:
+# preprocess_all_files(identifiers_list)
+# plot_combined_data(identifiers_list)
