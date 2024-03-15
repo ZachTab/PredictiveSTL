@@ -105,7 +105,57 @@ plot_combined_data <- function(identifiers_list, pdf_filename) {
 
 download_data()
 preprocess_all_files(identifiers_list)
+
 # Specify the PDF file name and path
 pdf_filename <- "~/Desktop/participant_plots.pdf"  
 plot_combined_data(identifiers_list, pdf_filename)
+
+
+# STL Prediction Function
+STLpredict <- function(par, rotation) {
+  
+  return((rotation * par['s']) * (dnorm(rotation, mean=0, sd=par['w']) / dnorm(0, mean=0, sd=par['w'])))
+}
+
+
+# STL Error Function
+STLerrors <- function(rotations, deviations, par) {
+  
+  # Generate model predictions using STLpredict function
+  model_predictions <- STLpredict(par, rotation)
+  
+  # Calculate squared errors between model predictions and actual deviations
+  squared_errors <- (deviations - model_predictions)^2
+  
+  # Compute the mean squared error (MSE)
+  MSE <- mean(squared_errors)
+  
+  return(MSE)
+}
+
+
+# STL Grid Search Function
+STLgridsearch <- function(rotations, deviations) {
+  # Define parameter grids
+  s_values <- seq(0.1, 2, length.out = 20)  # Example range for parameter s
+  w_values <- seq(0.1, 2, length.out = 20)  # Example range for parameter w
+  
+  # Generate all combinations of parameters
+  parameter_combinations <- expand.grid(s = s_values, w = w_values)
+  
+  # Initialize a data frame to store MSEs for each parameter set
+  MSE_df <- data.frame(parameters = NA, MSE = NA)
+  
+  # Perform grid search and store MSEs in a data frame
+  for (i in 1:nrow(parameter_combinations)) {
+    par <- parameter_combinations[i, ]
+    MSE <- STLerrors(rotations, deviations, par)
+    MSE_df <- rbind(MSE_df, data.frame(parameters = toString(par), MSE = MSE))
+  }
+  
+  # Sort the MSEs and select top 10 parameter sets
+  top_10_parameter_sets <- MSE_df[order(MSE_df$MSE), ][1:10, ]
+  
+  return(top_10_parameter_sets)
+}
 
