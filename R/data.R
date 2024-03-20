@@ -112,17 +112,17 @@ plot_combined_data(identifiers_list, pdf_filename)
 
 
 # STL Prediction Function
-STLpredict <- function(par, rotation) {
+STLpredict <- function(slope, width, rotations) {
   
-  return((rotation * par['s']) * (dnorm(rotation, mean=0, sd=par['w']) / dnorm(0, mean=0, sd=par['w'])))
+  return((rotations * slope) * (dnorm(rotations, mean=0, sd= width) / dnorm(0, mean=0, sd= width)))
 }
 
 
 # STL Error Function
-STLerrors <- function(rotations, deviations, par) {
+STLerrors <- function(rotations, deviations, slope, width) {
   
   # Generate model predictions using STLpredict function
-  model_predictions <- STLpredict(par, rotation)
+  model_predictions <- STLpredict(slope, width, rotations)
   
   # Calculate squared errors between model predictions and actual deviations
   squared_errors <- (deviations - model_predictions)^2
@@ -133,12 +133,11 @@ STLerrors <- function(rotations, deviations, par) {
   return(MSE)
 }
 
-
 # STL Grid Search Function
 STLgridsearch <- function(rotations, deviations) {
   # Define parameter grids
-  s_values <- seq(0.1, 2, length.out = 20)  # Example range for parameter s
-  w_values <- seq(0.1, 2, length.out = 20)  # Example range for parameter w
+  s_values <- seq(0.1, 1, length.out = 10)  # Example range for parameter s
+  w_values <- seq(0, 60, length.out = 60)  # Example range for parameter w
   
   # Generate all combinations of parameters
   parameter_combinations <- expand.grid(s = s_values, w = w_values)
@@ -148,9 +147,10 @@ STLgridsearch <- function(rotations, deviations) {
   
   # Perform grid search and store MSEs in a data frame
   for (i in 1:nrow(parameter_combinations)) {
-    par <- parameter_combinations[i, ]
-    MSE <- STLerrors(rotations, deviations, par)
-    MSE_df <- rbind(MSE_df, data.frame(parameters = toString(par), MSE = MSE))
+    s <- parameter_combinations$s[i]
+    w <- parameter_combinations$w[i]
+    MSE <- STLerrors(rotations, deviations, s, w)
+    MSE_df <- rbind(MSE_df, data.frame(parameters = toString(c(s = s, w = w)), MSE = MSE))
   }
   
   # Sort the MSEs and select top 10 parameter sets
@@ -158,4 +158,6 @@ STLgridsearch <- function(rotations, deviations) {
   
   return(top_10_parameter_sets)
 }
+
+
 
