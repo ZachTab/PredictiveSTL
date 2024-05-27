@@ -1,16 +1,16 @@
 library(Reach)
 library(optimx)
 
-download_data <- function() {
+Download_data <- function() {
   Reach::downloadOSFdata(repository='j67bv',
-                         filelist=list('data'=c('performanceurpp.zip')), 
+                         filelist=list('data'=c('data.zip')), 
                          folder='data', 
                          unzip=TRUE, 
                          removezips=TRUE)
 }
 
 # Preprocess participant data
-preprocess_file <- function(id) {
+Preprocess_file <- function(id) {
   # Read file for participant id
   filename <- sprintf('data/%s_performance.csv', id) 
   df <- read.csv(filename, stringsAsFactors = FALSE)
@@ -46,7 +46,7 @@ preprocess_file <- function(id) {
 }
 
 # Function to preprocess data and write to CSV
-RawData_CSV <- function() {
+RawData_CSV <- function(data_portion = "all", file_name) {
   # Initialize a data frame to store all processed data
   all_data <- data.frame()
   
@@ -80,12 +80,25 @@ RawData_CSV <- function() {
     output$Response[output$Rotation > 0] <- -1 * output$Response[output$Rotation > 0]
     output$Rotation[output$Rotation < 0] <- -1 * output$Rotation[output$Rotation < 0]
     
+    # Debug print to check the number of rows before subsetting
+    cat("Total rows for", identifier, "before subsetting:", nrow(output), "\n")
+    
+    # Subset the data based on the specified portion
+    if (data_portion == "first_half") {
+      output <- output[1:floor(nrow(output) / 2), ]
+    } else if (data_portion == "last_half") {
+      output <- output[(floor(nrow(output) / 2) + 1):nrow(output), ]
+    }
+    
+    # Debug print to check the number of rows after subsetting
+    cat("Total rows for", identifier, "after subsetting:", nrow(output), "\n")
+    
     # Add data for the current participant to the all_data data frame
     all_data <- rbind(all_data, output)
   }
   
   # Write processed data to CSV file
-  write.csv(all_data, "raw_data.csv", row.names = FALSE)
+  write.csv(all_data, file_name, row.names = FALSE)
 }
 
 
@@ -104,68 +117,51 @@ for (file in csv_files) {
   identifiers_list[[identifier]] <- identifier
 }
 
-preprocess_all_files <- function(identifiers_list) {
+Preprocess_all_files <- function(identifiers_list) {
   processed_data_list <- list()
   
   for (identifier in identifiers_list) {
-    processed_data <- preprocess_file(identifier)
+    processed_data <- Preprocess_file(identifier)
     processed_data_list[[identifier]] <- processed_data
   }
   
   return(processed_data_list)
 }
 
-plot_combined_data <- function(identifiers_list, pdf_filename) {
-  pdf(pdf_filename, width = 8.5, height = 11)  # Open PDF device
-  
-  layout(mat=matrix(c(1:6),byrow=TRUE,nrow=3))
-  
-  for (identifier in identifiers_list) {
-    processed_data <- preprocess_file(identifier)
-    
-    # Set up the plot
-    plot(processed_data$output$rotation, processed_data$output$response,
-         type = "p", pch = 16, col = "black",
-         xlab = "Rotation in Degrees", ylab = "Average Response",
-         main = identifier)
-    
-    # Add a dotted grey line at y = 0
-    abline(h = 0, lty = 2, col = "grey")
-    
-    # Plot mean data points with red line
-    lines(processed_data$result_mean$rotation, processed_data$result_mean$response,
-          type = "l", col = "red")
-    
-    # Plot median data points with blue line
-    lines(processed_data$result_median$rotation, processed_data$result_median$response,
-          type = "l", col = "blue")
-    
-    # Close PDF device if this is the last participant
-    if (identifier == identifiers_list[length(identifiers_list)]) {
-      dev.off()  # Close PDF device
-    }
-  }
-}
-
-
-# Specify the PDF file name and path
-pdf_filename <- "~/Desktop/participant_plots.pdf"  
-plot_combined_data(identifiers_list, pdf_filename)
-
-
-
 # STL Prediction Function
-STLpredict <- function(par, rotations) {
+STLPredict <- function(par, rotations) {
   
   return((rotations * par['s']) * (dnorm(rotations, mean=0, sd= par['w']) / dnorm(0, mean=0, sd= par['w'])))
 }
 
+# Function to establish & return predicted adaptions for given fit data and rotations  
+STLPredictions <- function(fits_data, rotations) {
+  results <- data.frame(participant = character(), rotations = numeric(), predictions = numeric(), stringsAsFactors = FALSE)
+  
+  fits_data$slope <- as.numeric(fits_data$slope)
+  fits_data$width <- as.numeric(fits_data$width)
+  
+  for (i in 1:nrow(fits_data)) {
+    participant <- fits_data$participant[i]
+    par <- c(s = fits_data$slope[i], w = fits_data$width[i])
+    predictions <- STLPredict(par = par, rotations = rotations)
+    
+    participant_results <- data.frame(participant = rep(participant, length(rotations)),
+                                      rotations = rotations,
+                                      predictions = predictions)
+    
+    results <- rbind(results, participant_results)
+  }
+  
+  return(results)
+}    
+
 
 # STL Error Function
-STLerrors <- function(par, rotations, deviations) {
+STLErrors <- function(par, rotations, deviations) {
   
   # Generate model predictions using STLpredict function
-  model_predictions <- STLpredict(par, rotations)
+  model_predictions <- STLPredict(par, rotations)
   
   # Calculate squared errors between model predictions and actual deviations
   squared_errors <- (deviations - model_predictions)^2
@@ -177,7 +173,7 @@ STLerrors <- function(par, rotations, deviations) {
 }
 
 # STL Grid Search Function
-STLgridsearch <- function(rotations, deviations) {
+STLGridsearch <- function(rotations, deviations) {
   # Define parameter grids
   s_values <- seq(0.1, 1, length.out = 10)  # Example range for parameter s
   w_values <- seq(0, 60, length.out = 60)  # Example range for parameter w
@@ -185,7 +181,7 @@ STLgridsearch <- function(rotations, deviations) {
   # Generate all combinations of parameters
   parameter_combinations <- expand.grid(s = s_values, w = w_values)
   
-  MSE <- apply(parameter_combinations, FUN=STLerrors, MARGIN=c(1), rotations = rotations, deviations = deviations)
+  MSE <- apply(parameter_combinations, FUN=STLErrors, MARGIN=c(1), rotations = rotations, deviations = deviations)
 
   top_parameters <- parameter_combinations[order(MSE)[1:10], ]
   
@@ -193,12 +189,12 @@ STLgridsearch <- function(rotations, deviations) {
 }
 
 
-STLoptimization <- function(top_parameters, rotations, deviations) { # run optimx on the best starting positions:
+STLOptimization <- function(top_parameters, rotations, deviations) { # run optimx on the best starting positions:
   allfits <- do.call("rbind",
                      apply( top_parameters,
                             MARGIN=c(1),
                             FUN=optimx::optimx,
-                            fn=STLerrors,
+                            fn=STLErrors,
                             method = "L-BFGS-B", 
                             lower = c(0.1, 1), 
                             upper = c(1, 60),
@@ -210,54 +206,56 @@ STLoptimization <- function(top_parameters, rotations, deviations) { # run optim
   return(unlist(win[1:2]))
 }
 
-
-STL <- function(processed_data) {
-  # 
-  # Preprocess data for the given identifier
-  # processed_data <- preprocess_file(identifier)
-  
-  # Extract rotations and deviations
-  rotations <- processed_data$output$rotation
-  deviations <- processed_data$output$response
-  
-  # Run grid search to find best parameters
-  top_parameters <- STLgridsearch(rotations, deviations)
-  
-  cat("Top 10 Parameters:\n")
-  print(top_parameters)
-  
-  # run optimx on the best starting positions:
-  winning_par <- STLoptimization(top_parameters, rotations, deviations)
-  
-  return(winning_par)
-  
-}
-
-
-STLIndividualFits <- function(identifiers_list) {
+# Returns individual STL Fit parameters for a list of participants
+STLIndividualFits <- function(identifiers_list, data_file = NULL) {
   # Create an empty data frame to store the best fits for all participants
   all_fits_df <- data.frame(participant = character(),
                             slope = numeric(),
                             width = numeric(),
                             stringsAsFactors = FALSE)
   
-  # Loop through each participant
-  for (identifier in identifiers_list) {
-    # Preprocess data for the current participant
-    processed_data <- preprocess_file(identifier)
+  # Check if a data_file argument is provided
+  if (!is.null(data_file)) {
+    # Read the data file
+    data <- read.csv(data_file, stringsAsFactors = FALSE)
     
-    # Extract rotations and deviations
-    rotations <- processed_data$output$rotation
-    deviations <- processed_data$output$response
-    
-    # Run grid search to find best parameters
-    top_parameters <- STLgridsearch(rotations, deviations)
-    
-    # Run optimization on the best starting positions
-    winning_par <- STLoptimization(top_parameters, rotations, deviations)
-    
-    # Add the participant id, slope, and width to the data frame
-    all_fits_df[nrow(all_fits_df) + 1, ] <- c(identifier, winning_par[1], winning_par[2])
+    # Loop through each participant
+    for (identifier in identifiers_list) {
+      # Extract data for the current participant from the data file
+      participant_data <- data[data$Participant_ID == identifier, ]
+      
+      # Extract rotations and deviations
+      rotations <- participant_data$Rotation
+      deviations <- participant_data$Response
+      
+      # Run grid search to find best parameters
+      top_parameters <- STLGridsearch(rotations, deviations)
+      
+      # Run optimization on the best starting positions
+      winning_par <- STLOptimization(top_parameters, rotations, deviations)
+      
+      # Add the participant id, slope, and width to the data frame
+      all_fits_df[nrow(all_fits_df) + 1, ] <- c(identifier, winning_par[1], winning_par[2])
+    }
+  } else {
+    # Loop through each participant
+    for (identifier in identifiers_list) {
+      # Preprocess data for the current participant
+      processed_data <- Preprocess_file(identifier)
+      
+      # Extract rotations and deviations
+      rotations <- processed_data$output$rotation
+      deviations <- processed_data$output$response
+      
+      # Run grid search to find best parameters
+      top_parameters <- STLGridsearch(rotations, deviations)
+      
+      # Run optimization on the best starting positions
+      winning_par <- STLOptimization(top_parameters, rotations, deviations)
+      
+      # Add the participant id, slope, and width to the data frame
+      all_fits_df[nrow(all_fits_df) + 1, ] <- c(identifier, winning_par[1], winning_par[2])
+    }
   }
   
   # Set column names
@@ -266,29 +264,36 @@ STLIndividualFits <- function(identifiers_list) {
   return(all_fits_df)
 }
 
-# Function to perform STL grid search and optimization on raw data
-STLfit <- function(participant, data_file) {
+
+# Returns a single (or weighted) set of STL Fit parameters for a set of participant data
+STLFit <- function(participant, data_file) {
   # Read raw data from CSV
   data <- read.csv(data_file)
   
   # If participant is a single ID, convert it to a list
-  if (!is.list(participant)) {
-    participant <- list(participant)
+  if (!is.vector(participant)) {
+    participant <- vector(participant)
   }
   
   # Extract data for all participants
-  all_participant_data <- lapply(participant, function(id) subset(data, Participant_ID == id))
-  all_data <- do.call(rbind, all_participant_data)
+  all_data <- NA
+  for (id in participant) {
+    if (is.data.frame(all_data)) {
+      all_data <- rbind(all_data, data[which(data$Participant_ID == id),])
+    } else {
+      all_data <- data[which(data$Participant_ID == id),]
+    }
+  }
   
   # Extract rotations and deviations from combined data
   rotations <- all_data$Rotation
   deviations <- all_data$Response
   
   # Run grid search to find best parameters
-  top_parameters <- STLgridsearch(rotations, deviations)
+  top_parameters <- STLGridsearch(rotations, deviations)
   
   # Run optimization on the best parameters
-  winning_par <- STLoptimization(top_parameters, rotations, deviations)
+  winning_par <- STLOptimization(top_parameters, rotations, deviations)
   
   # Create a data frame for the results
   results_df <- data.frame(Participant_ID = "Combined",
@@ -299,47 +304,181 @@ STLfit <- function(participant, data_file) {
   return(results_df)
 }
 
+# Baselines and derives Exponential Model Fits from participant Fixed Rotation data 
+STLExponentialFits <- function(ids) {
+  if (!is.vector(ids)) {
+    ids <- c(ids)  # Ensure ids is a vector
+  }
+  
+  results <- data.frame(participant = character(), lambda = numeric(), N0 = numeric(), stringsAsFactors = FALSE)
+  
+  for (id in ids) {
+    filename <- sprintf('data/%s_performance.csv', id)
+    df <- read.csv(filename, stringsAsFactors = FALSE)
+    
+    # Extract baseline data
+    bias <- median(df$reachdeviation_deg[which(df$label == 'fixed-rotation-baseline')[c(11:60)]])
+    learning <- df$reachdeviation_deg[which(df$label == 'fixed-rotation')] - bias
+    
+    # Derive Exponential Fits
+    fit <- Reach::exponentialFit(signal = learning)
+    
+    # Initialize a data frame to store Exponential Fit data
+    participant_result <- data.frame(participant = id, lambda = fit['lambda'], N0 = fit['N0'])
+    
+    # Store Exponential Fit Data
+    results <- rbind(results, participant_result)
+  }
+  
+  return(results)
+}
+    
 
-# Graph Predicted Responses using Winning Parameter
+# Obtains graph-able Exponential Model values for participants
+STLExponentialModel <- function(participants_results, mode = 'learning', setN0 = NULL, points) {
+    
+    participants_results$lambda <- as.numeric(participants_results$lambda)
+    participants_results$N0 <- as.numeric(participants_results$N0)
+    
+    # Initialize an empty data frame to hold all the plot data
+    all_plot_data <- data.frame()
+    
+    # Iterate over each participant's results
+    for (i in 1:nrow(participants_results)) {
+      participant_result <- participants_results[i, ]
+      lambda <- participant_result$lambda
+      N0 <- participant_result$N0
+      participant <- participant_result$participant
+      
+      # Generate the time points (for example, 0 to 100)
+      time_points = seq(0, points, by = 1)
+      
+      # Generate the model values using the exponentialModel function
+      model_output <- Reach::exponentialModel(par = c('lambda' = lambda, 'N0' = N0), timepoints = time_points, mode = mode, setN0 = setN0)
+      
+      # Create a data frame for the current participant's plot data
+      plot_data <- data.frame(time = model_output$trial, value = model_output$output, participant = participant)
+      
+      # Combine with the overall plot data
+      all_plot_data <- rbind(all_plot_data, plot_data)
+    }
+    return(all_plot_data)
+}
+    
+# Function to plot a participant's observed STL reach data along with average & predicted deviation lines
+PlotReachdata <- function(identifiers_list, filename, predictions_data) {
+  
+  dir_path <- "~/Desktop/Masters/Thesis/PredictiveSTL/Plots/Raw Data Plots/"
+  
+  pdf_name <- paste0(dir_path, filename, "_Reach_Data.pdf")
+  
+  if (!dir.exists(dir_path)) {
+    dir.create(dir_path, recursive = TRUE)
+  }
+  
+  pdf(pdf_name, width = 8.5, height = 11)  # Open PDF device
+  
+  layout(mat=matrix(c(1:6),byrow=TRUE,nrow=3))
+  
+  data_file <- read.csv("~/Desktop/Masters/Thesis/PredictiveSTL/Data Files/raw_data.csv", stringsAsFactors = FALSE)
+  
+  # Loop through each participant
+  for (identifier in identifiers_list) {
+    # Extract data for the current participant from the data file
+    participant_data <- data_file[data_file$Participant_ID == identifier, ]
+    
+    # Extract rotations and deviations
+    rotations <- participant_data$Rotation
+    deviations <- participant_data$Response
+    
+    # Calculate Mean Deviation per rotation value
+    mean_deviation <- participant_data %>%
+      group_by(Rotation) %>%
+      summarize(mean_deviation = mean(Response))
+    
+    # Extract predicted data for the current participant
+    participant_predictions <- predictions_data %>%
+      filter(participant == identifier)
+    
+    p <- ggplot(participant_data, aes(x = Rotation, y = Response)) +
+      geom_point(color = "black") +
+      
+      # Plot mean data points with red line
+      geom_line(data = mean_deviation, aes(x = Rotation, y = mean_deviation), color = "red", alpha = 0.6) +
+      
+      # Plot predicted data points with blue line
+      geom_line(data = participant_predictions, aes(x = rotations, y = predictions), color = "blue", alpha = 0.6) +
+      
+      # Add a dotted grey line at y = 0
+      geom_hline(yintercept = 0, linetype = "dotted", color = "grey") +    
+      
+      labs(title = identifier,
+           x = "Rotation in Degrees(°)", 
+           y = "Deviation in Degrees(°)") +
+      theme_minimal() +
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+    
+    # Print the plot to the PDF device
+    print(p)
+   
+  }
+  
+  dev.off()  # Close PDF device
 
-# # Extract the optimized parameters
-# opt_slope <- best_parameters$slope
-# opt_width <- best_parameters$width
-# 
-# # Run STLpredict with optimized parameters
-# predicted_values <- STLpredict(opt_slope, opt_width, rotations)
-# 
-# # Open a PDF
-# layout(mat = matrix(c(1:6), byrow = TRUE, nrow = 3))
-# pdf_filename <- paste0(identifier, "_predict.pdf")
-# pdf(pdf_filename, width = 8.5, height = 11)
-# 
-# # Plot Observed data
-# plot(rotations, deviations, type = "p", pch = 16, col = "black",
-#      xlab = "Rotation in Degrees", ylab = "Average Response",
-#      main = identifier)
-# 
-# # Plot Mean and Median Lines
-# abline(h = 0, lty = 2, col = "grey")
-# lines(processed_data$result_mean$rotation, processed_data$result_mean$response, type = "l", col = "red")
-# lines(processed_data$result_median$rotation, processed_data$result_median$response, type = "l", col = "blue")
-# 
-# # Plot STL Predicted Line with optimized parameters
-# stl_response <- STLpredict(opt_slope, opt_width, rotations = c(1,5,10,15,20,25,30,35,40,45))
-# lines(x = c(1,5,10,15,20,25,30,35,40,45), stl_response, type = 'l', col = 'black')
-# 
-# dev.off()
-# 
-# cat("PDF file saved as:", pdf_filename, "\n")
-# 
-# # Print PDF file path
-# pdf_full_path <- normalizePath(pdf_filename)
-# cat("PDF file saved at:", pdf_full_path, "\n")
-# 
-# return(predicted_values)
+}
+
+# Function to plot exponential model values 
+STLExponentialPlot <- function(data, rot, vert_line = NULL, trials = NULL){
+  
+  main_title <- paste(paste0(rot,"°"), "Adaptation Over", trials, "Trials")
+  
+  # Allows to plot for a certain number of trials
+  if (is.null(trials)){
+  
+  ggplot(data, aes(x = time, y = value, color = participant)) +
+    geom_line(alpha = 0.7) +
+      labs(title = main_title,
+           x = "Trials",
+           y = "Model Value") +
+      theme_minimal() +
+      guides(color = "none") +
+      geom_vline(xintercept = vert_line, linetype = "dotted", color = "black")
     
     
-    
-    
-    
-    
+  } else{
+    # Add the trials column, resetting at 0 for each new participant
+      data <- data %>%
+        group_by(participant) %>%
+        mutate(trials = row_number() - 1) %>%
+        ungroup()
+      
+      # Filter data to include only up to the specified number of trials
+      data <- data %>%
+        filter(trials <= trials)
+      
+      ggplot(data, aes(x = trials, y = value, color = participant)) +
+        geom_line(alpha = 0.7) +
+        labs(title = main_title,
+             x = "Trials",
+             y = "Model Value") +
+        theme_minimal() +
+        guides(color = "none") +
+        geom_vline(xintercept = vert_line, linetype = "dotted", color = "black") +
+        scale_x_continuous(limits = c(0, trials))
+      
+  }
+}
+
+# Function to plot predicted STL adaptation values
+STLPredictPlot <- function(data, vert_line = NULL){
+  
+main <- "Predicted STL Adaption"
+  
+ggplot(data, aes(x = rotations, y = predictions, group = participant)) +
+  geom_line(color = "red", alpha = 0.6) +  # Lower alpha for more transparency
+  labs(title = main,
+       x = "Rotations in Degrees(°)",
+       y = "Predicted Adaptation in Degrees(°)") +
+  theme_minimal() +
+  geom_vline(xintercept = vert_line, linetype = "dotted", color = "black")    
+}   
