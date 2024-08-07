@@ -1,8 +1,10 @@
 library(Reach)
 library(optimx)
+library(dplyr)
+library(ggplot2)
 
 Download_data <- function() {
-  Reach::downloadOSFdata(repository='j67bv',
+  Reach::downloadOSFdata(repository='6m24e',
                          filelist=list('data'=c('data.zip')), 
                          folder='data', 
                          unzip=TRUE, 
@@ -46,7 +48,7 @@ Preprocess_file <- function(id) {
 }
 
 # Function to preprocess data and write to CSV
-RawData_CSV <- function(data_portion = "all", file_name) {
+RawData_CSV <- function(data_portion = "all", phase, file_name) {
   # Initialize a data frame to store all processed data
   all_data <- data.frame()
   
@@ -61,24 +63,62 @@ RawData_CSV <- function(data_portion = "all", file_name) {
     # Read file for participant id
     df <- read.csv(file, stringsAsFactors = FALSE)
     
-    # Extract relevant data
-    idx <- which(df$label == 'stl-target-rotation')
-    response <- df$reachdeviation_deg[idx + 1] - df$reachdeviation_deg[idx - 1]
-    rotation <- df$rotation[idx]
-    
-    # Exclude outliers and filter corresponding elements
-    filtered_idx <- idx[response >= -60 & response <= 60]
-    filtered_response <- response[response >= -60 & response <= 60]
-    filtered_rotation <- rotation[response >= -60 & response <= 60]
-    
-    # Store into data frame
-    output <- data.frame(Participant_ID = rep(identifier, length(filtered_idx)),
-                         Rotation = filtered_rotation,
-                         Response = filtered_response)
-    
-    # Normalize data
-    output$Response[output$Rotation > 0] <- -1 * output$Response[output$Rotation > 0]
-    output$Rotation[output$Rotation < 0] <- -1 * output$Rotation[output$Rotation < 0]
+    if (phase == "STL") {
+      # Extract relevant data for STL phase
+      idx <- which(df$label == 'stl-target-rotation')
+      response <- df$reachdeviation_deg[idx + 1] - df$reachdeviation_deg[idx - 1]
+      rotation <- df$rotation[idx]
+      
+      # Exclude outliers and filter corresponding elements
+      filtered_idx <- idx[response >= -60 & response <= 60]
+      filtered_response <- response[response >= -60 & response <= 60]
+      filtered_rotation <- rotation[response >= -60 & response <= 60]
+      
+      # Store into data frame
+      output <- data.frame(Participant_ID = rep(identifier, length(filtered_idx)),
+                           Rotation = filtered_rotation,
+                           Response = filtered_response)
+      
+      # Normalize data
+      output$Response[output$Rotation > 0] <- -1 * output$Response[output$Rotation > 0]
+      output$Rotation[output$Rotation < 0] <- -1 * output$Rotation[output$Rotation < 0]
+      
+    } else if (phase %in% c("Short", "Short1", "Short2")) {
+      # Extract relevant data for Short phase
+      short_indices <- which(grepl("^short", df$label))
+      
+      if (length(short_indices) < 50) {
+        warning("Not enough short trials found for participant: ", identifier)
+        next
+      }
+      
+      if (phase == "Short1") {
+        short_start <- short_indices[1]
+        short_end <- tail(which(df$label == "short-washout" & lead(df$label) == "short-acquire"), 1)
+      } else if (phase == "Short2") {
+        short_start <- head(which(df$label == "short-acquire" & lag(df$label) == "short-washout"), 1)
+        short_end <- short_indices[length(short_indices)]
+      } else {
+        short_start <- short_indices[1]
+        short_end <- short_indices[length(short_indices)]
+      }
+      
+      if (is.na(short_start) || is.na(short_end)) {
+        warning("Could not find valid start and end indices for participant: ", identifier)
+        next
+      }
+      
+      short_phase_indices <- short_start:short_end
+      
+      # Store into data frame
+      output <- data.frame(Participant_ID = rep(identifier, length(short_phase_indices)),
+                           Label = df$label[short_phase_indices],
+                           Rotation = df$rotation[short_phase_indices],
+                           Reach_Deviation = df$reachdeviation_deg[short_phase_indices])
+      
+    } else {
+      stop("Invalid phase. Please choose 'STL', 'Short', 'Short1', or 'Short2'.")
+    }
     
     # Debug print to check the number of rows before subsetting
     cat("Total rows for", identifier, "before subsetting:", nrow(output), "\n")
@@ -305,29 +345,97 @@ STLFit <- function(participant, data_file) {
 }
 
 # Baselines and derives Exponential Model Fits from participant Fixed Rotation data 
-STLExponentialFits <- function(ids) {
+STLExponentialFits <- function(ids, phase, data_file = NULL) {
   if (!is.vector(ids)) {
     ids <- c(ids)  # Ensure ids is a vector
   }
   
-  results <- data.frame(participant = character(), lambda = numeric(), N0 = numeric(), stringsAsFactors = FALSE)
+  if (!is.null(data_file)) {
+    df <- read.csv(data_file, stringsAsFactors = FALSE)
+  }
+  
+  results <- data.frame(participant = character(), rotation = numeric(), lambda = numeric(), N0 = numeric(), stringsAsFactors = FALSE)
   
   for (id in ids) {
-    filename <- sprintf('data/%s_performance.csv', id)
-    df <- read.csv(filename, stringsAsFactors = FALSE)
+    cat("Processing participant:", id, "\n")
     
-    # Extract baseline data
-    bias <- median(df$reachdeviation_deg[which(df$label == 'fixed-rotation-baseline')[c(11:60)]])
-    learning <- df$reachdeviation_deg[which(df$label == 'fixed-rotation')] - bias
+    if (is.null(data_file)) {
+      filename <- sprintf('data/%s_performance.csv', id)
+      df <- read.csv(filename, stringsAsFactors = FALSE)
+    } else {
+      participant_df <- df[df$Participant_ID == id, ]
+    }
     
-    # Derive Exponential Fits
-    fit <- Reach::exponentialFit(signal = learning)
-    
-    # Initialize a data frame to store Exponential Fit data
-    participant_result <- data.frame(participant = id, lambda = fit['lambda'], N0 = fit['N0'])
-    
-    # Store Exponential Fit Data
-    results <- rbind(results, participant_result)
+    if (phase == "long") {
+      # Extract baseline data
+      baseline_indices <- which(participant_df$label == 'fixed-rotation-baseline')
+      if (length(baseline_indices) < 60) {
+        warning("Not enough baseline trials for participant: ", id)
+        next
+      }
+      bias <- median(participant_df$reachdeviation_deg[baseline_indices[11:60]], na.rm = TRUE)
+      learning_indices <- which(participant_df$label == 'fixed-rotation')
+      learning <- participant_df$reachdeviation_deg[learning_indices] - bias
+      
+      # Derive Exponential Fits
+      fit <- Reach::exponentialFit(signal = learning)
+      
+      # Initialize a data frame to store Exponential Fit data
+      participant_result <- data.frame(participant = id, rotation = NA, lambda = fit['lambda'], N0 = fit['N0'])
+      results <- rbind(results, participant_result)
+      
+    } else if (phase == "short") {
+      # Identify the indices for the 'short' phases
+      short_indices <- which(grepl("^short-", participant_df$Label))
+      cat("Short indices for participant", id, ":", short_indices, "\n")
+      
+      if (length(short_indices) < 90) {
+        warning("Not enough short trials found for participant: ", id)
+        next
+      }
+      
+      # Extract baseline data
+      baseline_indices <- which(participant_df$Label == 'short-baseline')
+      if (length(baseline_indices) < 10) {
+        warning("Not enough short-baseline trials found for participant: ", id)
+        next
+      }
+      bias <- median(participant_df$Reach_Deviation[baseline_indices], na.rm = TRUE)
+      
+      # Calculate learning for all short-rotated trials
+      short_rotation_indices <- which(participant_df$Label == 'short-rotated')
+      if (length(short_rotation_indices) == 0) {
+        warning("No short-rotation trials found for participant: ", id)
+        next
+      }
+      
+      # Organize results by rotation values
+      unique_rotations <- unique(participant_df$Rotation[short_rotation_indices])
+      for (rotation_value in unique_rotations) {
+        rotation_indices <- short_rotation_indices[participant_df$Rotation[short_rotation_indices] == rotation_value]
+        learning <- (sign(rotation_indices) * -1) * (participant_df$Reach_Deviation[rotation_indices] - bias)
+        
+        if (any(is.na(learning))) {
+          warning("NA values found in learning data for participant: ", id)
+          learning <- na.omit(learning)
+        }
+        
+        if (length(learning) == 0) {
+          warning("No valid learning data found for participant: ", id)
+          next
+        }
+        
+        # Derive Exponential Fits
+        fit <- Reach::exponentialFit(signal = learning)
+        
+        # Initialize a data frame to store Exponential Fit data
+        participant_result <- data.frame(participant = id, rotation = rotation_value, lambda = fit['lambda'], N0 = fit['N0'])
+        results <- rbind(results, participant_result)
+      }
+      
+    } else {
+      stop("Invalid phase. Please choose 'long' or 'short'.")
+    }
   }
   
   return(results)
@@ -335,34 +443,40 @@ STLExponentialFits <- function(ids) {
     
 
 # Obtains graph-able Exponential Model values for participants
-STLExponentialModel <- function(participants_results, mode = 'learning', setN0 = NULL, points) {
+STLExponentialModel <- function(participants_results, mode = 'learning', setN0 = NULL, points, rotation = NULL) {
+  
+  participants_results$lambda <- as.numeric(participants_results$lambda)
+  participants_results$N0 <- as.numeric(participants_results$N0)
+  
+  # Filter participants' results based on the rotation value if provided
+  if (!is.null(rotation)) {
+    participants_results <- participants_results[participants_results$rotation == rotation, ]
+  }
+  
+  # Initialize an empty data frame to hold all the plot data
+  all_plot_data <- data.frame()
+  
+  # Iterate over each participant's results
+  for (i in 1:nrow(participants_results)) {
+    participant_result <- participants_results[i, ]
+    lambda <- participant_result$lambda
+    N0 <- participant_result$N0
+    participant <- participant_result$participant
     
-    participants_results$lambda <- as.numeric(participants_results$lambda)
-    participants_results$N0 <- as.numeric(participants_results$N0)
+    # Generate the time points (for example, 0 to 'points')
+    time_points <- seq(0, points, by = 1)
     
-    # Initialize an empty data frame to hold all the plot data
-    all_plot_data <- data.frame()
+    # Generate the model values using the exponentialModel function
+    model_output <- Reach::exponentialModel(par = c('lambda' = lambda, 'N0' = N0), timepoints = time_points, mode = mode, setN0 = setN0)
     
-    # Iterate over each participant's results
-    for (i in 1:nrow(participants_results)) {
-      participant_result <- participants_results[i, ]
-      lambda <- participant_result$lambda
-      N0 <- participant_result$N0
-      participant <- participant_result$participant
-      
-      # Generate the time points (for example, 0 to 100)
-      time_points = seq(0, points, by = 1)
-      
-      # Generate the model values using the exponentialModel function
-      model_output <- Reach::exponentialModel(par = c('lambda' = lambda, 'N0' = N0), timepoints = time_points, mode = mode, setN0 = setN0)
-      
-      # Create a data frame for the current participant's plot data
-      plot_data <- data.frame(time = model_output$trial, value = model_output$output, participant = participant)
-      
-      # Combine with the overall plot data
-      all_plot_data <- rbind(all_plot_data, plot_data)
-    }
-    return(all_plot_data)
+    # Create a data frame for the current participant's plot data
+    plot_data <- data.frame(time = model_output$trial, value = model_output$output, participant = participant)
+    
+    # Combine with the overall plot data
+    all_plot_data <- rbind(all_plot_data, plot_data)
+  }
+  
+  return(all_plot_data)
 }
     
 # Function to plot a participant's observed STL reach data along with average & predicted deviation lines
@@ -482,3 +596,31 @@ ggplot(data, aes(x = rotations, y = predictions, group = participant)) +
   theme_minimal() +
   geom_vline(xintercept = vert_line, linetype = "dotted", color = "black")    
 }   
+
+# To plot XY Scatter plots
+STL_XY <- function(data, rot, x, y) {
+  # Filter data based on the rotation value
+  filtered_data <- data[data$rotation == rot, ]
+  
+  # Calculate the regression slope
+  regression_model <- lm(as.formula(paste(y, "~", x)), data = filtered_data)
+  slope <- coef(regression_model)[2]
+  
+  # Determine the range for the x and y axes
+  x_range <- range(filtered_data[[x]], na.rm = TRUE)
+  y_range <- range(filtered_data[[y]], na.rm = TRUE)
+  common_range <- range(c(x_range, y_range))
+  
+  # Create the plot
+  p <- ggplot(filtered_data, aes_string(x = x, y = y)) +
+    geom_point(color = "black") +  # Plot points as black dots
+    geom_abline(intercept = 0, slope = slope, linetype = "dotted", color = "red") +  # Add red, dotted regression line from origin
+    labs(title = paste("STL vs Short-Fixed Prediction", rot, "°"),
+         x = "STL Deviation (°)",
+         y = "Exponential Deviation (°)") +
+    coord_fixed(ratio = 1, xlim = common_range, ylim = common_range) +  # Ensure identical scaling for both axes
+    theme_minimal()  # Use a minimal theme
+  
+  # Print the plot
+  print(p)
+}
